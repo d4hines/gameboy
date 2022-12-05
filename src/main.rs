@@ -57,6 +57,7 @@ fn initialize_audio(mbrd: &gameboy::motherboard::MotherBoard) {
         });
     });
 }
+
 #[cfg(feature = "gui")]
 fn main() {
     use gameboy::gpu::{SCREEN_H, SCREEN_W};
@@ -155,119 +156,5 @@ fn main() {
             }
         }
     }
-    mbrd.mmu.borrow_mut().cartridge.sav();
-}
-
-#[cfg(feature = "tty")]
-fn main() {
-    use gameboy::gpu::{SCREEN_H, SCREEN_W};
-    use gameboy::motherboard::MotherBoard;
-    use std::io::Write;
-
-    rog::reg("gameboy");
-    rog::reg("gameboy::cartridge");
-
-    let mut c_audio = false;
-
-    let mut rom = String::from("");
-    {
-        let mut ap = argparse::ArgumentParser::new();
-        ap.set_description("Gameboy emulator");
-        ap.refer(&mut rom).add_argument("rom", argparse::Store, "Rom name");
-        ap.refer(&mut c_audio)
-            .add_option(&["-a", "--enable-audio"], argparse::StoreTrue, "Enable audio");
-        ap.parse_args_or_exit();
-    }
-
-    let mut mbrd = MotherBoard::power_up(rom);
-
-    if c_audio {
-        initialize_audio(&mbrd);
-    }
-
-    let mut window_buffer = vec![0x00; SCREEN_W * SCREEN_H];
-
-    if !blockish::current_terminal_is_supported() {
-        rog::println!("Terminal is not supported");
-        std::process::exit(1);
-    }
-    let mut term_width = SCREEN_W as u32;
-    let mut term_height = SCREEN_H as u32;
-    let _screen = crossterm_input::RawScreen::into_raw_mode();
-    let input = crossterm_input::input();
-    let mut reader = input.read_async();
-    match crossterm::terminal::size() {
-        Ok(res) => {
-            term_width = res.0 as u32 * 8;
-            term_height = res.1 as u32 * 8 * 2;
-        }
-        Err(_) => {}
-    }
-    crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen).unwrap();
-    let mut engine = blockish::ThreadedEngine::new(term_width, term_height, false);
-    loop {
-        // Execute an instruction
-        mbrd.next();
-
-        // Update the window
-        if mbrd.check_and_reset_gpu_updated() {
-            let mut i: usize = 0;
-            for l in mbrd.mmu.borrow().gpu.data.iter() {
-                for w in l.iter() {
-                    let b = u32::from(w[0]) << 16;
-                    let g = u32::from(w[1]) << 8;
-                    let r = u32::from(w[2]);
-                    let a = 0xff00_0000;
-
-                    window_buffer[i] = a | b | g | r;
-                    i += 1;
-                }
-            }
-            let original_width = SCREEN_W as u32;
-            let original_height = SCREEN_H as u32;
-
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::MoveTo(0, 0));
-            engine.render(
-                &|x, y| {
-                    let start = (y * original_height / term_height * original_width + (x * original_width / term_width))
-                        as usize;
-                    let pixel = window_buffer[start];
-                    (
-                        (pixel >> 16 & 0xff) as u8,
-                        (pixel >> 8 & 0xff) as u8,
-                        (pixel & 0xff) as u8,
-                    )
-                },
-            );
-        }
-
-        if !mbrd.cpu.flip() {
-            continue;
-        }
-
-        // Handling keyboard events
-        let keys = vec![
-            (crossterm_input::KeyEvent::Right, gameboy::joypad::JoypadKey::Right),
-            (crossterm_input::KeyEvent::Up, gameboy::joypad::JoypadKey::Up),
-            (crossterm_input::KeyEvent::Left, gameboy::joypad::JoypadKey::Left),
-            (crossterm_input::KeyEvent::Down, gameboy::joypad::JoypadKey::Down),
-            (crossterm_input::KeyEvent::Char('z'), gameboy::joypad::JoypadKey::A),
-            (crossterm_input::KeyEvent::Char('x'), gameboy::joypad::JoypadKey::B),
-            (crossterm_input::KeyEvent::Char(' '), gameboy::joypad::JoypadKey::Select),
-            (crossterm_input::KeyEvent::Enter, gameboy::joypad::JoypadKey::Start),
-        ];
-        let option_event = reader.next();
-        if Some(crossterm_input::InputEvent::Keyboard(crossterm_input::KeyEvent::Esc)) == option_event {
-            break;
-        }
-        for (rk, vk) in &keys {
-            if Some(crossterm_input::InputEvent::Keyboard(rk.clone())) == option_event {
-                mbrd.mmu.borrow_mut().joypad.keydown(vk.clone());
-            } else {
-                mbrd.mmu.borrow_mut().joypad.keyup(vk.clone());
-            }
-        }
-    }
-    crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen).unwrap();
     mbrd.mmu.borrow_mut().cartridge.sav();
 }
